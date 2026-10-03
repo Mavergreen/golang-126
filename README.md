@@ -1,9 +1,31 @@
-# golang
+# Go 1.26 for Mavericks
 
-A patched Go 1.26.4 toolchain that installs and runs on Mac OS X 10.9 Mavericks (Intel x86_64),
-plus a native arm64 cross toolchain that targets 10.9 from a modern Mac.
+Go toolchain for Mac OS X 10.9 Mavericks.
 
-## Install
+## Compiling
 
-Download the latest `.pkg` from [Releases](https://github.com/Mavergreen/golang-126/releases/latest)
-and open it. The toolchain keeps itself current via a Sparkle updater.
+### Directly on Mavericks
+
+```sh
+sudo installer -pkg golang-<version>-native-mavericks*.pkg -target /
+```
+
+In a new Terminal:
+
+```sh
+go-126 build -o hello hello.go
+./hello
+```
+
+### From Apple Silicon
+
+```sh
+sudo installer -pkg golang-<version>-cross-mavericks*.pkg -target /
+```
+
+In a new Terminal:
+
+```sh
+GOARCH=amd64 go-126 build -o hello hello.go
+scp hello your-mavericks-system:
+```
