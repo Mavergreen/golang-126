@@ -11,8 +11,8 @@ GitHub Releases. Ships as `golang-<gover>-native-mavericks.<rev>.pkg` and
 
 ## Build / release
 
-- `sh build/build-native.sh` — **Rosetta-free**: fetch go1.26.4 → apply `patches/126/` → build
-  static macports-legacy-support → native arm64 `make.bash` builder → cross `go install cmd` for
+- `sh build/build-native.sh` — **Rosetta-free**: fetch go1.26.4 → apply `patches/126/` → fetch
+  the prebuilt Recaulk archive → native arm64 `make.bash` builder → cross `go install cmd` for
   amd64 (via a build-time `-arch x86_64`/min-10.9 CC wrapper) → assemble amd64 GOROOT (local `WORK`).
   No amd64 code runs in the build path; Rosetta is only an optional post-build self-test.
 - `sh build/package-pkg.sh` — stage the updater + LaunchAgent, wrap with the 10.9.5 floor →
@@ -66,7 +66,7 @@ GitHub Releases. Ships as `golang-<gover>-native-mavericks.<rev>.pkg` and
 - **The amd64 toolchain is cross-linked `-linkmode=external`** so the toolchain's own binaries (go/gofmt/tools)
   route through the min-10.9 CC wrapper — Go 1.26 internal-links them to a 12.0 floor otherwise.
   `link-recipe.sh` (the old `-extldflags`/`GO_EXTLINK_ENABLED` plumbing) is gone; the CC wrappers
-  inject the shim directly. [[mavericks-go126-downstream-linking]]
+  inject Recaulk directly. [[mavericks-go126-downstream-linking]]
 - **The trust model:** crypto/x509's system roots on darwin are the keychain union — all three trust
   domains read with Go 1.17's precedence- and policy-aware code, ∪ the CA bundle, minus distrust —
   served lazily by `loadSystemRoots` (patches 0005–0010, 0013–0015). `GODEBUG=x509usefallbackroots=0`
