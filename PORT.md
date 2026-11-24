@@ -65,6 +65,7 @@ in `patches/`. A renamed function breaks the hook at compile time, which goes re
 |---|---|
 | 0010 `verify.go` | `keychainUnionDistrusted`, `keychainUnionFilterDistrusted` |
 | 0013 `root_darwin.go` (`systemVerify` and `loadSystemRoots`) | `keychainUnionNativeVerifier`, `keychainUnionLoadSystemRoots`, `keychainUnionLegacySecTrust`, `keychainUnionLegacyEvaluate` |
+| 0018 `verify_test.go`, `hybrid_pool_test.go` | — (points readers at `TestKeychainUnion*`) |
 
 | Overlay file (golang-port) | Uses from hooks |
 |---|---|
@@ -136,6 +137,16 @@ SSL policy is passed as a single `SecPolicyRef` (10.9's SecTrustEvaluate faults 
 `SetFallbackRoots` behaves as upstream instead of panicking, an empty union is an error, and Apple's verifier must work on
 every macOS. *Reconsider:* never while invariants 1, 5 and 6 hold; the `loadSystemRoots` half moves to a one-statement
 `root.go` hook (golang-127's 0016) if Go 1.26 ever moves `loadSystemRoots` there, as Go 1.27 did.
+
+### 0018-root-test-darwin-keychainunion.patch
+Hook (tests). Upstream tests that assume Apple's verifier is the darwin default skip on darwin: `TestIssue51759`
+(verify_test.go; Apple's error strings) and `TestHybridPool` (hybrid_pool_test.go; AIA-fetched intermediates, which Go's
+verifier over the union does not fetch, so its system-only-pool case fails on 10.9) -- invariants 1, 5. The reason strings are
+golang-127's 0018's, word for word. Go 1.26 builds golang-127's other two, `TestEnvVars` and
+`TestLoadSystemCertsLoadColonSeparatedDirs` (root_unix_test.go), only for the BSDs, Linux and Solaris, never darwin, and has
+no `TestSSLCertEnvOverride`, so this patch has nothing to skip there. golang-port's `tests/on-target/run.sh` requires both skips,
+each with its reason, and fails if any of those three runs on darwin. *Reconsider:* when upstream's tests stop asserting
+upstream's darwin semantics, or a 1.26.x builds those three tests on darwin.
 
 ## Not carried here
 
