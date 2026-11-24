@@ -6,7 +6,7 @@ auto-updater — entirely on modern hardware. No 10.9 build runner anywhere.
 
 **Status:** The Go 1.26 line, the family's first; `golang-127` was forked from it, and since phase 4 of the
 go-lines-on-Linux effort both lines build the same way, through golang-port. Trust semantics: hook patches 0005,
-0006, 0010 and 0013 (Go 1.26's, which also carries darwin's `loadSystemRoots`), tracked in `PORT.md`, plus
+0006, 0010 and 0013 (Go 1.26's, which also carries darwin's `loadSystemRoots`), and test patch 0018, tracked in `PORT.md`, plus
 golang-port's overlay. Built and proven end to end on real 10.9.5 hardware (`ultimate-hat`), and published to
 GitHub Releases. Ships as `golang-<gover>-native-mavericks.<rev>.pkg` and
 `golang-<gover>-cross-mavericks.<rev>.pkg`, which install `/usr/local/mavergreen/go126` and
