@@ -6,7 +6,7 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Track Go for THIS REPO's line. One repo ships one line, so the cap keeps it on 1.26.x: Go 1.27 arrives as a new repo, typically noticed when a consumer's Renovate bump needs it, never as a bump here.",
+      "description": "Track Go for THIS REPO's line. One repo ships one line, so the cap keeps it on 1.26.x: the next minor arrives as a new repo, never as a bump here.",
       "managerFilePatterns": [
         "/^UPSTREAM_VERSION$/"
       ],
@@ -16,6 +16,32 @@
       "depNameTemplate": "go-126",
       "packageNameTemplate": "go",
       "datasourceTemplate": "golang-version"
+    },
+    {
+      "customType": "regex",
+      "description": "The golang-port release this line builds with: the trust overlay and the build chain (build/port.sh fetches golang-port-<pin>.tar.gz from tag v<pin>).",
+      "managerFilePatterns": [
+        "/^components/golang-port/version$/"
+      ],
+      "matchStrings": [
+        "^(?<currentValue>\\S+)\\s*$"
+      ],
+      "depNameTemplate": "Mavergreen/golang-port",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "The clang22 the build chain compiles and links with, and that both pkgs require.",
+      "managerFilePatterns": [
+        "/^components/clang22/version$/"
+      ],
+      "matchStrings": [
+        "^(?<currentValue>\\S+)\\s*$"
+      ],
+      "depNameTemplate": "Mavergreen/clang-22",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-mavericks\\.(?<build>\\d+)$"
     }
   ],
   "packageRules": [
@@ -27,7 +53,7 @@
       "allowedVersions": "<1.27"
     },
     {
-      "description": "The BOOTSTRAP Go (actions/setup-go) stays on this repo's line too. Go is self-hosting, so this is the compiler that builds the toolchain we ship -- an ingredient, not CI trivia. Left uncapped it automerged its way onto 1.27 in a repo capped to 1.26.x, silently changing a shipped artifact's inputs with a green build as the only signal, and putting the string '1.27' in a repo that must never build it. A new Go line is a new repo.",
+      "description": "The BOOTSTRAP Go (actions/setup-go) stays on this repo's line too. Go is self-hosting, so this is the compiler that builds the toolchain we ship -- an ingredient, not CI trivia. Left uncapped it automerged its way onto the next minor in a repo capped to its own line, silently changing a shipped artifact's inputs with a green build as the only signal, and putting the next line's version in a repo that must never build it. A new Go line is a new repo.",
       "matchDepNames": [
         "go"
       ],

@@ -8,13 +8,15 @@ port. An own-upstream bump cuts `<upstream>-mavericks.1`; an ingredient bump cut
 
 | Ingredient | Pinned in | Renovate | On a bump |
 |---|---|---|---|
-| Go source (own upstream) | `UPSTREAM_VERSION` | ✅ `golang-version` datasource, patch-automerged | `release.yml` on push to main cuts `-mavericks.1` |
+| Go source (own upstream) | `UPSTREAM_VERSION` | ✅ `golang-version` datasource, **capped to this line** (`<1.27`), patch-automerged | `release.yml` on push to main cuts `-mavericks.1` |
 | Recaulk (librecaulk.a, prebuilt) | `components/recaulk/version` | ✅ shipyard preset (github-releases on Mavergreen/recaulk) | watched path → repackage dispatched |
-| curl.se CA bundle | `vendor/cacert.pem`, hash-pinned by `CA_SHA256` in `build/versions.sh` | ❌ **untrackable — manual refresh** (see below) | both are watched paths → repackage dispatched when the refresh lands |
-| Bootstrap Go (builds the toolchain) | `go-version:` on `actions/setup-go` in `.github/workflows/release.yml` | ✅ github-actions `uses-with`, **capped to this line** (`<1.27`) | `release.yml` is not a watched path, so cut the repackage deliberately |
+| golang-port (the trust overlay and the build chain) | `components/golang-port/version` | ✅ `renovate.json` customManager (github-releases on Mavergreen/golang-port, tags `v*`) | watched path → repackage dispatched |
+| clang22 (compiles and links everything; both pkgs require it) | `components/clang22/version` | ✅ `renovate.json` customManager (github-releases on Mavergreen/clang-22) | watched path → repackage dispatched |
+| curl.se CA bundle | `vendor/cacert.pem`, hash-pinned by `CA_SHA256` in `line.env` | ❌ **untrackable — manual refresh** (see below) | both are watched paths → repackage dispatched when the refresh lands |
+| Bootstrap Go (builds the toolchain) | `go-version: '1.26.x'` on `actions/setup-go` in `.github/workflows/release.yml` | ✅ github-actions `uses-with`, **capped to this line** (`<1.27`) | `release.yml` is not a watched path, so cut the repackage deliberately |
 | MacOSX10.9 SDK, Sparkle framework | `Mavergreen/shipyard@v1` | ✅ github-actions manager tracks the tag | `@v1` is a *moving* tag, so content moves without any path changing (see below) |
 
-Not ingredients: `patches/` and the build scripts are this repo's own recipe — a change there is
+Not ingredients: `patches/` (the hook patches) and `line.env`'s other constants are this repo's own recipe — a change there is
 a repackage you cut deliberately (`workflow_dispatch` with `local_release=true`), not something
 Renovate drives.
 
@@ -40,7 +42,7 @@ land normally. Raising the cap is the same deliberate act as creating a new line
 compare — and scraping curl.se's extract page for the current date would be exactly the fragile
 tracker we don't want.
 
-Nothing drifts in the meantime, because the bundle is **vendored**: `build/fetch-ca.sh` uses the
+Nothing drifts in the meantime, because the bundle is **vendored**: golang-port's `build/fetch-ca.sh` uses the
 committed `vendor/cacert.pem` and verifies it against `CA_SHA256`, and only re-downloads when that
 file is absent or `MAVERICKS_CA_REFRESH=1` says to. Builds are reproducible and a rotation upstream
 changes nothing here until someone chooses to take it.
@@ -49,11 +51,13 @@ So the cost of being untracked is not a broken build — it's that **nobody is t
 publishes new roots. Refresh deliberately:
 
 ```sh
-MAVERICKS_CA_REFRESH=1 sh build/fetch-ca.sh   # re-download; prints the new sha256
-# paste it into CA_SHA256 (keep the Mozilla date in the trailing comment), commit both files
+MAVERICKS_CA_REFRESH=1 LINE_ROOT="$PWD" sh "$(sh build/port.sh)/build/fetch-ca.sh"
+# it downloads and stops: "FATAL: CA bundle sha256 mismatch: got <new> want <old>"
+# put <new> into CA_SHA256 in line.env, then run the same command again: it verifies and rewrites vendor/cacert.pem
+# commit both files
 ```
 
-That commit touches `build/versions.sh` *and* `vendor/cacert.pem`, both of which the repackage
+That commit touches `line.env` *and* `vendor/cacert.pem`, both of which the repackage
 caller watches, so the rebuilt-with-new-roots release cuts itself.
 
 If the silence ever matters more than the simplicity, the clean fix is a dated pin
@@ -71,20 +75,19 @@ auto-repackage anything downstream — cut those repackages by hand when they ma
 
 The 10.9 SDK is Apple's, so neither pkg carries it. The cross tree's `SDKs` is a link to
 `../sdk109/SDKs`, which `sudo longboat sdk install 10.9` fills. Every darwin/amd64 binary is external-linked against it, so
-the cross pkg requires Longboat 20261019.1 or later (the first with `longboat sdk install`) and `sdk109`;
-consumers get both from install@v1 with `products: go126-cross@<tag>`. Should `sdk109` go missing later,
-`mavericks-cross-clang` stops at its first use and names that command. The build itself still takes
-the SDK from shipyard's `fetch_sdk.sh`, and the tests that run the staged cross toolchain point its
-`SDKs` at that copy; `package-cross-pkg.sh` restores the link.
+both pkgs require `sdk109`, and neither requires Longboat: sdk109 is what the wrapper uses, however it was installed (maintainer
+ruling 2026-11-20, check at use). Consumers get sdk109 from install@v1 with `products: go126-cross@<tag>`. Should `sdk109` go missing later,
+`mavericks-cross-clang` stops at its first use and names that command. The build itself reaches the
+SDK at sdk109's installed prefix (golang-port's PORT.md, "Fixed C-toolchain paths").
 
 ## Conformance deviations
 
-- rosetta:.github/workflows/release.yml: the release job optionally installs Rosetta (`softwareupdate --install-rosetta --agree-to-license || true`) so `tests/rosetta-selftest.sh` can exercise the cross-produced darwin/amd64 toolchain by running it, not just inspecting its files. Both the install and the test invocation are `|| true`: this step never gates the build, it only adds a self-test when Rosetta happens to be available on the runner. Reconsider when this self-test can run on an x86_64 host (the 10.9 box or an Intel runner) instead; at the latest before macOS 28 removes Rosetta.
-- rosetta:tests/rosetta-selftest.sh: runs the staged darwin/amd64 `go` binary directly (`"$go_bin" version`, then a pure-Go compile+link+run) on the arm64 CI runner; macOS transparently routes that `exec` through Rosetta, so no `arch -x86_64` appears here even though every invocation is translated. SKIPs cleanly (exit 0, "amd64 exec unavailable (no Rosetta)") when translation is unavailable, and the script is itself only ever invoked best-effort. Reconsider when this self-test can run on an x86_64 host instead of via Rosetta; at the latest before macOS 28 removes Rosetta.
 - sdk-pin:*/src/debug/dwarf/testdata/typedef.macho*: upstream Go's DWARF test fixtures, Mach-O objects the Go team compiled long ago; shipped verbatim as source-tree testdata and never run as a program
 - sdk-pin:*/src/runtime/race/*darwin*.syso: upstream Go's prebuilt race-detector runtime objects, shipped verbatim as part of std's source tree and linked only into a user's -race build
-- sdk-pin:*/go126-cross/bin/*: the cross toolchain's own arm64 host tools cannot be linked against the pinned 11.3 SDK. Go 1.26 requires macOS 12, and its crypto/x509 calls SecTrustCopyCertificateChain (macOS 12+), which the 11.3 SDK does not declare ("Undefined symbols for architecture arm64: _SecTrustCopyCertificateChain", CI run 36172426521, 2026-09-25). So they record upstream Go's own floor, 12.0. These run only on the modern Mac doing the cross build; the darwin/amd64 apps they emit are what must run on 10.9, and those are pinned. Revisit if the family's arm64 pin moves to 12 or later.
-- sdk-pin:*/go126-cross/pkg/tool/darwin_arm64/*: same as the line above: the cross toolchain's own arm64 host tools, which Go 1.26 cannot link against the 11.3 SDK.
-- floor:golang-*-cross-*.pkg: the cross toolchain runs on macOS 11 and later (arm64) and only targets 10.9, so its archive's install floor is 11.0, not 10.9.5
-- rosetta:tests/trust/native-verifier-untrusted.sh: on the arm64 CI runner it executes the cross-built darwin/amd64 fixture (no `arch -x86_64`; macOS routes the exec through Rosetta, which the release job primes) to see Apple's verifier, reached through Recaulk's `SecTrustEvaluateWithError` trampoline, reject an untrusted chain. It runs that half only when amd64 exec works and never gates on it: the `nm` check that the trampoline is linked in is the gate. Reconsider when the check can run on an x86_64 host newer than 10.9 (an Intel runner); at the latest before macOS 28 removes Rosetta.
+- sdk-pin:*/go126-cross/bin/*: Go 1.26 requires macOS 12 and its linker stamps an internal link 12.0 (macho.go's LC_BUILD_VERSION 12.0.0); the cross toolchain's own binaries are Go-linked, not relinked against the pinned SDK.
+- sdk-pin:*/go126-cross/pkg/tool/darwin_arm64/*: Go 1.26 requires macOS 12 and its linker stamps an internal link 12.0 (macho.go's LC_BUILD_VERSION 12.0.0); the cross toolchain's own binaries are Go-linked, not relinked against the pinned SDK.
+- floor:golang-*-cross-*.pkg: the cross toolchain runs on macOS 12 and later (arm64) and only targets 10.9 -- Go 1.26 requires macOS 12 -- so its archive's install floor is 12.0, not 10.9.5
+- rosetta:.github/workflows/release.yml: the release job optionally installs Rosetta (`softwareupdate --install-rosetta --agree-to-license || true`) so `tests/rosetta-selftest.sh` can exercise the cross-produced darwin/amd64 toolchain by running it, not just inspecting its files. Both the install and the test invocation are `|| true`: this step never gates the build, it only adds a self-test when Rosetta happens to be available on the runner. Reconsider when this self-test can run on an x86_64 host (the 10.9 box or an Intel runner) instead; at the latest before macOS 28 removes Rosetta.
+- staged-by:golang-port: the two pkgs are staged by golang-port's `build/package.sh` (which calls `stage_product.sh`), pinned in `components/golang-port/version` and resolved by `build/port.sh`; this line holds only its inputs.
+- standalone-text:src/crypto/x509/root_keychainunion_darwin*.go: Go's darwin CA-bundle default list names where built programs find the family's trust store (PORT.md invariant 7); the toolchain never reads it
 - on-target: no 10.9 acceptance job yet; exit: a release.yml job on Mavergreen/mavericks-vm@v1 that installs this run's pkg in the guest and runs what it ships, which publish needs
