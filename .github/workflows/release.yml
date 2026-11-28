@@ -1,10 +1,10 @@
 name: release
 
 # Builds BOTH of this line's products, and the Linux cross archive, on ubuntu-latest through golang-port's
-# build chain (build/port.sh resolves the pinned port). Three entry points:
+# build chain (build/port.sh resolves the pinned port). The version is the declared port scheme's, derived
+# once by shipyard's release-version.sh in version-check. Two entry points:
 #   - push to main   : build; if the current upstream (UPSTREAM_VERSION) has no release yet,
-#                       auto-cut <upstream>-mavericks.1 (build/version.sh auto -> RELEASE=yes)
-#   - a *-mavericks.* tag : publish that exact version
+#                       auto-cut <upstream>-mavericks.1
 #   - workflow_dispatch with local_release=true : cut a local <upstream>-mavericks.(N+1) repackage
 # Products:
 #   - native (runs on 10.9): amd64/min-10.9 toolchain + x86_64 Sparkle updater + 10.9.5 floor
@@ -22,7 +22,6 @@ name: release
 on:
   push:
     branches: [main]          # push to main: build; if upstream has no release yet, cut it
-    tags: ['*-mavericks.*']   # a version tag publishes that exact version
   pull_request:
     branches: [main]          # PR build is the status check Renovate automerge waits on
   workflow_dispatch:
@@ -36,7 +35,7 @@ permissions:
   contents: write
 
 # Only a pull_request supersedes -- keyed per ref, so a force-push replaces its own predecessor.
-# Everything else (a branch push, a *-mavericks.* tag, a workflow_dispatch) is keyed per RUN and is
+# Everything else (a branch push, a workflow_dispatch) is keyed per RUN and is
 # therefore alone in its group: never queued, never evicted, never cancelled.
 #
 # cancel-in-progress:false was never the protection it looked like: it protects the RUNNING job and
@@ -45,7 +44,7 @@ permissions:
 # run that evicted it.
 #
 # A push to main HERE CAN PUBLISH (an upstream with no release yet auto-cuts -mavericks.1), and
-# concurrency is resolved when a run is queued -- before the ver step decides whether this one
+# concurrency is resolved when a run is queued -- before version-check decides whether this one
 # releases -- so cancelling the run would cancel the publish job with it.
 concurrency:
   group: >-
@@ -65,54 +64,52 @@ jobs:
   # second line also would have coupled builds: `publish` needs the whole matrix, so a failing line
   # would have blocked a ready one from shipping. A Go minor line is a product, and a product is its
   # own repo -- so this workflow builds the one line this repo has.
-  plan:
+  version-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     outputs:
       line: ${{ steps.p.outputs.line }}
       version: ${{ steps.p.outputs.version }}
+      mode: ${{ steps.p.outputs.mode }}
       any_publish: ${{ steps.p.outputs.any_publish }}
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0   # build/version.sh counts existing <upstream>-mavericks.* tags
+          fetch-depth: 0   # the version counts existing <upstream>-mavericks.* tags
       - name: Install mavericks-shipyard
         uses: Mavergreen/shipyard/.github/actions/install@v1
-      - name: Decide the release plan
+      # spec: mavergreen-conventions SKILL.md "Versioning" -- port: auto keeps the current N and publishes only an upstream
+      #       with no tag yet; local (a local_release dispatch) cuts N+1. Only main publishes, from a push or a dispatch.
+      - name: Derive and check the version
         id: p
+        env:
+          LOCAL_RELEASE: ${{ inputs.local_release }}
         run: |
           set -eu
-          mode=auto
-          if [ "${{ github.event_name }}" = workflow_dispatch ] && [ "${{ inputs.local_release }}" = "true" ]; then
-            mode=local
-          fi
           # One line, asserted -- not assumed. lines/ is retired: a second line belongs in its own repo.
           [ -f UPSTREAM_VERSION ] || { echo "::error::no UPSTREAM_VERSION at the repo root"; exit 1; }
           [ ! -d lines ] || { echo "::error::lines/ is retired -- a second line belongs in its own repo"; exit 1; }
-          line="$(sh build/version.sh line)"
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            # A tag names this line's release; anything else just builds.
-            up="$(tr -d '[:space:]' < UPSTREAM_VERSION)"
-            case "$GITHUB_REF_NAME" in
-              "$up"-mavericks.*) full="$GITHUB_REF_NAME"; rel=yes ;;
-              *) full="$(GO_LINE=$line sh build/version.sh auto | sed -n 's/^FULL=//p')"; rel=no ;;
-            esac
-          else
-            out="$(GO_LINE=$line sh build/version.sh "$mode")"
-            full="$(printf '%s\n' "$out" | sed -n 's/^FULL=//p')"
-            rel="$(printf '%s\n' "$out" | sed -n 's/^RELEASE=//p')"
-            # only main cuts releases; PRs and other branches never publish
-            [ "$GITHUB_REF_NAME" = main ] || rel=no
-          fi
-          echo "line $line -> $full (publish=$rel)"
-          { echo "line=$line"; echo "version=$full"; } >> "$GITHUB_OUTPUT"
+          line="$(tr -d '[:space:]' < UPSTREAM_VERSION | sed -n 's/^\([0-9]*\)\.\([0-9]*\)\..*$/\1\2/p')"
+          [ -n "$line" ] || { echo "::error::cannot derive the Go line from UPSTREAM_VERSION"; exit 1; }
+          mode="$(sh "$SHIPYARD_SCRIPTS/release-mode.sh")"
+          full="$(sh "$SHIPYARD_SCRIPTS/release-version.sh" --product "go$line" --mode "$mode")"
+          rel=yes
+          [ -z "$(git tag --list "$full")" ] || rel=no
+          [ "$GITHUB_REF_NAME" = main ] || rel=no
+          [ "$GITHUB_EVENT_NAME" = push ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || rel=no
+          sh "$SHIPYARD_SCRIPTS/check-release-version.sh" --product "go$line" --version "$full" --sha "$GITHUB_SHA" --mode "$mode" --publishing "$rel"
+          echo "line $line -> $full (mode=$mode publish=$rel)"
+          { echo "line=$line"; echo "version=$full"; echo "mode=$mode"; } >> "$GITHUB_OUTPUT"
           if [ "$rel" = yes ]; then echo "any_publish=true" >> "$GITHUB_OUTPUT"; else echo "any_publish=false" >> "$GITHUB_OUTPUT"; fi
 
 
   build:
-    needs: plan
+    needs: version-check
     runs-on: ubuntu-latest
     env:
-      GO_LINE: ${{ needs.plan.outputs.line }}
+      GO_LINE: ${{ needs.version-check.outputs.line }}
       # build/port.sh refuses a set GOLANG_PORT_DIR under this: nothing ships from an unpinned port.
       MAVERGREEN_RELEASE: 'yes'
       # Every port step is `LINE_ROOT=<this checkout> sh "$PORT_DIR/build/<step>.sh"`.
@@ -126,7 +123,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0   # build/version.sh counts existing <upstream>-mavericks.* tags
+          fetch-depth: 0   # the release notes compare against the previous <upstream>-mavericks.* tag
 
       # The C toolchain is pinned in files, not here, so Renovate bumps one place and the port's
       # c-toolchain.sh checks the installed products against the same files (strictly, since CI=true).
@@ -154,14 +151,14 @@ jobs:
           # the port's build/env.sh puts WORK at $MAVERICKS_BUILD_ROOT/golang-go<line>; its out/ holds every product
           echo "GO_OUT=$RUNNER_TEMP/mm-build/golang-go$GO_LINE/out" >> "$GITHUB_ENV"
 
-      # The plan job already decided this line's version; take it rather than recomputing, so every
+      # version-check already decided this line's version; take it rather than recomputing, so every
       # job in the run agrees about what is being built. VERSION is written locally (never committed)
       # because the port's env.sh and the updater bundle read it.
-      - name: Take this line's version from the plan
+      - name: Take this line's version from version-check
         id: ver
         run: |
           set -eu
-          full="${{ needs.plan.outputs.version }}"
+          full="${{ needs.version-check.outputs.version }}"
           printf '%s\n' "$full" > VERSION
           { echo "full=$full"; echo "tag=$full"; } >> "$GITHUB_OUTPUT"
           echo "VER=$full" >> "$GITHUB_ENV"
@@ -287,8 +284,8 @@ jobs:
       # dotted version prefix every "<line>-mavericks.*" tag actually starts with. Passing GO_LINE
       # verbatim here would silently match no tag (none begins with "<line>"), which drops the
       # ingredient section AND the compare link on every future release -- confirmed by generating
-      # both ways against this repo's real tags before wiring this in. Derived from VER, which the
-      # plan job already resolved for this line.
+      # both ways against this repo's real tags before wiring this in. Derived from VER, which
+      # version-check resolved for this line.
       - name: Stage release notes
         run: |
           set -eu
@@ -301,7 +298,7 @@ jobs:
             --out dist/RELEASE_NOTES.md
 
       - name: EdDSA-sign both .pkgs + generate both Sparkle appcasts
-        if: needs.plan.outputs.any_publish == 'true'
+        if: needs.version-check.outputs.any_publish == 'true'
         shell: bash   # -eo pipefail: a failing ls must not hand head an empty list
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
@@ -312,7 +309,7 @@ jobs:
           SH="$SHIPYARD_SCRIPTS"   # exported by install@v1; don't re-derive it from the registry
           [ -d "$SH" ] || { echo "::error::SHIPYARD_SCRIPTS not set by install@v1"; exit 1; }
           VER="${{ steps.ver.outputs.full }}"; TAG="${{ steps.ver.outputs.tag }}"
-          LINE="${{ needs.plan.outputs.line }}"
+          LINE="${{ needs.version-check.outputs.line }}"
           CROSS_MIN_OS="$(sed -n 's/^CROSS_MIN_OS=//p' line.env)"
           [ -n "$CROSS_MIN_OS" ] || { echo "::error::line.env sets no CROSS_MIN_OS"; exit 1; }
           OUT="$GO_OUT"
@@ -337,7 +334,7 @@ jobs:
       - name: Collect artifacts
         run: |
           set -eu
-          LINE="${{ needs.plan.outputs.line }}"
+          LINE="${{ needs.version-check.outputs.line }}"
           mkdir -p dist
           cp "$GO_OUT"/*.pkg dist/                         # both products' installers
           for f in "go$LINE.xml" "go$LINE-cross.xml"; do [ -f "$GO_OUT/$f" ] && cp "$GO_OUT/$f" dist/ || true; done
@@ -371,23 +368,23 @@ jobs:
       # Gated like the signing step: a non-publishing build has no appcast, and this is a question
       # about a release, not about a build.
       - name: Artifact conformance
-        if: needs.plan.outputs.any_publish == 'true'
+        if: needs.version-check.outputs.any_publish == 'true'
         shell: bash   # -eo pipefail: artifact-facts.sh dying must fail the step, not shorten the stream
         run: |
-          sh "$SHIPYARD_SCRIPTS/artifact-facts.sh" dist "${{ needs.plan.outputs.version }}" \
+          sh "$SHIPYARD_SCRIPTS/artifact-facts.sh" dist "${{ needs.version-check.outputs.version }}" \
             | sh "$SHIPYARD_SCRIPTS/check-artifact-conformance.sh"
           # Behavior gate, per appcast: a client on this LINE's previous release must SEE this as an
           # upgrade -- a numeric sparkle:version ordering strictly after the last published tag IN THIS
           # LINE. Scope the tag search to the line (e.g. <x.y>.5-mavericks.5 -> glob <x.y>.*) so <x.y>.7
           # compares against <x.y>.5, not a later minor shipped between. Both native + cross carry this VER.
-          GLOB="$(printf '%s' "${{ needs.plan.outputs.version }}" | sed 's/-mavericks\..*//' | cut -d. -f1,2).*"
-          for a in "go${{ needs.plan.outputs.line }}.xml" "go${{ needs.plan.outputs.line }}-cross.xml"; do
-            sh "$SHIPYARD_SCRIPTS/assert_appcast_upgradeable.sh" --appcast "dist/$a" --version "${{ needs.plan.outputs.version }}" --upstream-glob "$GLOB"
+          GLOB="$(printf '%s' "${{ needs.version-check.outputs.version }}" | sed 's/-mavericks\..*//' | cut -d. -f1,2).*"
+          for a in "go${{ needs.version-check.outputs.line }}.xml" "go${{ needs.version-check.outputs.line }}-cross.xml"; do
+            sh "$SHIPYARD_SCRIPTS/assert_appcast_upgradeable.sh" --appcast "dist/$a" --version "${{ needs.version-check.outputs.version }}" --upstream-glob "$GLOB"
           done
 
       - uses: actions/upload-artifact@v7
         with:
-          name: golang-go${{ needs.plan.outputs.line }}
+          name: golang-go${{ needs.version-check.outputs.line }}
           path: dist/*
 
   # The native pkg, installed the way a user installs it, on a real Mac OS X 10.9.5 guest
@@ -399,7 +396,7 @@ jobs:
   # a pure-Go and a cgo program through it. A test's 77, its skip, is a failure here. publish waits for it. A fork's pull request gets no secrets, so cannot boot
   # the guest, and never publishes: it skips this.
   on-target:
-    needs: [plan, build]
+    needs: [version-check, build]
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -407,8 +404,8 @@ jobs:
       contents: read
       packages: write   # mavericks-vm's shared image cache
     env:
-      GO_LINE: ${{ needs.plan.outputs.line }}
-      VER: ${{ needs.plan.outputs.version }}
+      GO_LINE: ${{ needs.version-check.outputs.line }}
+      VER: ${{ needs.version-check.outputs.version }}
       MAVERGREEN_RELEASE: 'yes'
     steps:
       - uses: actions/checkout@v7
@@ -418,7 +415,7 @@ jobs:
         uses: Mavergreen/shipyard/.github/actions/install@v1
       - uses: actions/download-artifact@v8
         with:
-          name: golang-go${{ needs.plan.outputs.line }}
+          name: golang-go${{ needs.version-check.outputs.line }}
           path: ${{ runner.temp }}/dist
       # The guest gets the workspace, not this runner's files: bring in this run's native pkg, clang22's
       # pkg at the line's pin, Longboat at its CI pin (for sdk109, which clang22 requires), and the pinned
@@ -487,14 +484,14 @@ jobs:
   # on 10.9, which on-target covers. The cross standalone archive gets the same, unpacked under a path
   # with a space by the port's standalone smoke. One short job; publish waits for it.
   modern-smoke:
-    needs: [plan, build]
+    needs: [version-check, build]
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: macos-26
     permissions:
       contents: read
     env:
-      GO_LINE: ${{ needs.plan.outputs.line }}
-      VER: ${{ needs.plan.outputs.version }}
+      GO_LINE: ${{ needs.version-check.outputs.line }}
+      VER: ${{ needs.version-check.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -509,7 +506,7 @@ jobs:
           products: clang22-cross@${{ steps.pins.outputs.clang22 }}
       - uses: actions/download-artifact@v8
         with:
-          name: golang-go${{ needs.plan.outputs.line }}
+          name: golang-go${{ needs.version-check.outputs.line }}
           path: dist
       # Before the pkg goes in, so nothing installed of go<line>-cross can stand in for the archive.
       - name: The cross standalone archive, unpacked anywhere, links 10.9 programs
@@ -542,31 +539,33 @@ jobs:
   # both signed products (native + cross .pkg and both feeds) and the Linux archive, so one scan covers
   # everything publish attaches.
   scan:
-    needs: [plan, build]
-    if: always() && (needs.plan.outputs.any_publish == 'true')   # a build that fails after signing left logs too; scan them
+    needs: [version-check, build]
+    if: always() && (needs.version-check.outputs.any_publish == 'true')   # a build that fails after signing left logs too; scan them
     permissions:
       actions: read     # this run's job logs
       contents: read
     uses: Mavergreen/shipyard/.github/workflows/scan-for-key.yml@v1
     with:
-      artifact: golang-go${{ needs.plan.outputs.line }}
+      artifact: golang-go${{ needs.version-check.outputs.line }}
     secrets:
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
 
   publish:
-    needs: [plan, build, scan, on-target, modern-smoke]
-    if: needs.plan.outputs.any_publish == 'true'
+    needs: [version-check, build, scan, on-target, modern-smoke]
+    if: needs.version-check.outputs.any_publish == 'true'
     permissions:
       contents: write
     uses: Mavergreen/shipyard/.github/workflows/publish-release.yml@v1
     with:
-      version: ${{ needs.plan.outputs.version }}
-      artifact: golang-go${{ needs.plan.outputs.line }}
+      version: ${{ needs.version-check.outputs.version }}
+      product: go${{ needs.version-check.outputs.line }}
+      release-mode: ${{ needs.version-check.outputs.mode }}
+      artifact: golang-go${{ needs.version-check.outputs.line }}
 
   required:
     name: required (release)
     if: always()
-    needs: [plan, build, on-target, modern-smoke, scan, publish]
+    needs: [version-check, build, on-target, modern-smoke, scan, publish]
     runs-on: ubuntu-latest
     steps:
       - uses: Mavergreen/shipyard/.github/actions/required-gate@v1

@@ -23,5 +23,6 @@ prose for that one release. When present, it is inserted verbatim right after th
 title. It must NOT start with its own `## ` heading -- the generator already emits the title;
 a second one would double it.
 
-Most releases have no notes here at all, and that's fine: the generator's own sections are the
-whole note.
+A release whose only change is a pin (a Renovate repackage) needs no notes here: the generator's own sections
+are the whole note. Any other publishing release must commit at least one `changes/` sentence, or shipyard's
+`check-release-version.sh` refuses it.
