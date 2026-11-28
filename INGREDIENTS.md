@@ -93,3 +93,7 @@ SDK at sdk109's installed prefix (golang-port's PORT.md, "Fixed C-toolchain path
 - macos-runner:release.yml:modern-smoke: the cross pkg's arm64 toolchain is installed and run on current Apple Silicon macOS (check 37); exit: none while the cross pkg ships an arm64 toolchain
 - staged-by:golang-port: the two pkgs are staged by golang-port's `build/package.sh` (which calls `stage_product.sh`), pinned in `components/golang-port/version` and resolved by `build/port.sh`; this line holds only its inputs.
 - standalone-text:src/crypto/x509/root_keychainunion_darwin*.go: Go's darwin CA-bundle default list names where built programs find the family's trust store (PORT.md invariant 7); the toolchain never reads it
+
+## Versioning
+
+- port

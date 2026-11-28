@@ -69,11 +69,12 @@ GitHub Releases. Ships as `golang-<gover>-native-mavericks.<rev>.pkg` and
     `tests/port-md-test.sh` and the compat guard are for. **Never relax those to make a build green.**
     `PORT.md` is the authority for why each carried patch exists; a spec disagreeing with it loses.
 - Upstream Go version lives in `UPSTREAM_VERSION` (bare `x.y.z`, Renovate-managed) at the repo root.
-  `build/version.sh <auto|local>` derives the full `<upstream>-mavericks.N` + a `RELEASE=yes/no`
-  decision from existing `*-mavericks.*` tags: `auto` is `N=1`/`RELEASE=yes` for a new upstream (no
+  The version is INGREDIENTS.md's declared `port` scheme, derived once in release.yml's `version-check` by shipyard's
+  `release-version.sh` (`build/version.sh <auto|local>` gives the same answer locally); it is the full `<upstream>-mavericks.N`,
+  and whether it publishes follows from the existing `*-mavericks.*` tags: `auto` is `N=1`/`RELEASE=yes` for a new upstream (no
   tag yet), else current `N`/`RELEASE=no`; `local` (via `workflow_dispatch local_release`) is always
-  `N=maxN+1`/`RELEASE=yes`. `VERSION` (the full string) is workflow-written and **gitignored** —
-  never committed.
+  `N=maxN+1`/`RELEASE=yes`. A publishing release needs committed notes under `release-notes/<version>/changes/`
+  unless only pins moved. `VERSION` (the full string) is workflow-written and **gitignored** — never committed.
 - Renovate auto-bumps `UPSTREAM_VERSION` (capped to this repo's line) and automerges the PR **once the
   build is green** — patch, minor and major alike, per the family's ship-if-green policy. This repo
   needs no extra `packageRules` beyond the cap: a Go minor bump past the cap never opens a PR at all,
